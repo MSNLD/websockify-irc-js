@@ -16,7 +16,13 @@ To run websockify-js:
 
     cd websockify
     npm install
-    ./websockify.js [options] SOURCE_ADDR:PORT TARGET_ADDR:PORT
+    ./websockify-irc.js [options] SOURCE_ADDR:PORT TARGET_ADDR:PORT
+
+To run under npm:
+
+    cd websockify
+    npm install
+    npm run start -- [options] SOURCE_ADDR:PORT TARGET_ADDR:PORT
 
 ### News/help/contact
 
