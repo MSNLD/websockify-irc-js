@@ -8,102 +8,138 @@
 // Requires node modules: ws and optimist
 //     npm install ws optimist
 
+// WEBIRC Spec based on
+// https://ircv3.net/specs/extensions/webirc.html
 
-var argv = require('optimist').argv,
-    net = require('net'),
-    http = require('http'),
-    https = require('https'),
-    url = require('url'),
-    path = require('path'),
-    fs = require('fs'),
-    mime = require('mime-types'),
+const argv = require("optimist").argv;
+const net = require("net");
+const FCrDNS = require("fcrdns");
+const http = require("http");
+const https = require("https");
+const url = require("url");
+const path = require("path");
+const fs = require("fs");
+const mime = require("mime-types");
+const Buffer = require("buffer").Buffer;
+const WebSocketServer = require("ws").Server;
+const current_file = require("path").basename(__filename);
+const pjson = require("./package.json");
 
-    Buffer = require('buffer').Buffer,
-    WebSocketServer = require('ws').Server,
+const rDNS = new FCrDNS();
 
-    webServer, wsServer,
-    source_host, source_port, target_host, target_port,
-    web_path = null;
-
+let webServer,
+  wsServer,
+  source_host,
+  source_port,
+  target_host,
+  target_port,
+  web_path = null,
+  websocket_count = 0;
 
 // Handle new WebSocket client
-new_client = function(client, req) {
-    var clientAddr = client._socket.remoteAddress, log;
-    var start_time = new Date().getTime();
+const new_client = function (client, req) {
+  websocket_count++;
+  let clientAddr = client._socket.remoteAddress;
 
-    console.log(req ? req.url : client.upgradeReq.url);
-    log = function (msg) {
-        console.log(' ' + clientAddr + ': '+ msg);
-    };
-    log('WebSocket connection');
-    log('Version ' + client.protocolVersion + ', subprotocol: ' + client.protocol);
+  console.log(req ? req.url : client.upgradeReq.url);
+  console.log(`WebSocket connection from: ${clientAddr}`);
+  console.log(
+    `Version ${client.protocolVersion} , subprotocol: ${client.protocol}`,
+  );
 
-    if (argv.record) {
-      var rs = fs.createWriteStream(argv.record + '/' + new Date().toISOString().replace(/:/g, "_"));
-      rs.write('var VNC_frame_data = [\n');
-    } else {
-      var rs = null;
+  let rs = null;
+  if (argv.record) {
+    rs = fs.createWriteStream(
+      argv.record + "/" + new Date().toISOString().replace(/:/g, "_"),
+    );
+    rs.write("let VNC_frame_data = [\n");
+  }
+
+  rDNS.get(client._socket.remoteAddress, function (hostname) {
+    if (hostname !== null) {
+      console.log(`Resolved dns: ${hostname}`);
     }
-
-    var target = net.createConnection(target_port,target_host, function() {
-        log('connected to target');
-    });
-    target.on('data', function(data) {
-        //log("sending message: " + data);
-
-        if (rs) {
-          var tdelta = Math.floor(new Date().getTime()) - start_time;
-          var rsdata = '\'{' + tdelta + '{' + decodeBuffer(data) + '\',\n';
-          rs.write(rsdata);
-        }
-
-        try {
-            client.send(data);
-        } catch(e) {
-            log("Client closed, cleaning up target");
-            target.end();
-        }
-    });
-    target.on('end', function() {
-        log('target disconnected');
-        client.close();
-        if (rs) {
-          rs.end('\'EOF\'];\n');
-        }
-    });
-    target.on('error', function() {
-        log('target connection error');
-        target.end();
-        client.close();
-        if (rs) {
-          rs.end('\'EOF\'];\n');
-        }
-    });
-
-    client.on('message', function(msg) {
-        //log('got message: ' + msg);
-
-        if (rs) {
-          var rdelta = Math.floor(new Date().getTime()) - start_time;
-          var rsdata = ('\'}' + rdelta + '}' + decodeBuffer(msg) + '\',\n');
-          rs.write(rsdata);
-        }
-
-        target.write(msg);
-    });
-    client.on('close', function(code, reason) {
-        log('WebSocket client disconnected: ' + code + ' [' + reason + ']');
-        target.end();
-    });
-    client.on('error', function(a) {
-        log('WebSocket client error: ' + a);
-        target.end();
-    });
+    createConnection(client, req, rs, clientAddr, hostname);
+  });
 };
 
+function createConnection(client, req, rs, clientAddr, hostAddr) {
+  let start_time = new Date().getTime();
+  let log = function (msg) {
+    console.log(` ${clientAddr}: ${msg}`);
+  };
+
+  let target = net.createConnection(target_port, target_host, function () {
+    log("connected to target");
+
+    // If the IP address is an IPv6 address beginning with a colon, it MUST be sent with a canonically-acceptable preceding zero.
+
+    let ipAdjusted = clientAddr.startsWith(":") ? `0${clientAddr}` : clientAddr;
+    let hostAdjusted = hostAddr || ipAdjusted;
+
+    target.write(
+      `WEBIRC ${argv.password} ${argv.username} ${hostAdjusted} ${ipAdjusted} secure\r\n`,
+    );
+  });
+  // target.on("connect", (stream) => {
+  // });
+  target.on("data", function (data) {
+    //log("sending message: " + data);
+
+    if (rs) {
+      let tdelta = Math.floor(new Date().getTime()) - start_time;
+      let rsdata = "'{" + tdelta + "{" + decodeBuffer(data) + "',\n";
+      rs.write(rsdata);
+    }
+
+    try {
+      client.send(data);
+    } catch (e) {
+      log("Client closed, cleaning up target");
+      target.end();
+    }
+  });
+  target.on("end", function () {
+    log("target disconnected");
+    client.close();
+    if (rs) {
+      rs.end("'EOF'];\n");
+    }
+  });
+  target.on("error", function () {
+    log("target connection error");
+    target.end();
+    client.close();
+    if (rs) {
+      rs.end("'EOF'];\n");
+    }
+  });
+
+  client.on("message", function (msg) {
+    //log('got message: ' + msg);
+
+    if (rs) {
+      let rdelta = Math.floor(new Date().getTime()) - start_time;
+      let rsdata = "'}" + rdelta + "}" + decodeBuffer(msg) + "',\n";
+      rs.write(rsdata);
+    }
+
+    target.write(msg);
+  });
+  client.on("close", function (code, reason) {
+    websocket_count--;
+    log(`WebSocket client disconnected: ${code} [${reason}]`);
+    target.end();
+  });
+  client.on("error", function (a) {
+    log(`WebSocket client error: ${a}`);
+    target.end();
+  });
+}
+
 function decodeBuffer(buf) {
-  var returnString = '';
-  for (var i = 0; i < buf.length; i++) {
+  let returnString = "";
+  for (let i = 0; i < buf.length; i++) {
     if (buf[i] >= 48 && buf[i] <= 90) {
       returnString += String.fromCharCode(buf[i]);
     } else if (buf[i] === 95) {
@@ -111,13 +147,13 @@ function decodeBuffer(buf) {
     } else if (buf[i] >= 97 && buf[i] <= 122) {
       returnString += String.fromCharCode(buf[i]);
     } else {
-      var charToConvert = buf[i].toString(16);
+      let charToConvert = buf[i].toString(16);
       if (charToConvert.length === 0) {
-        returnString += '\\x00';
+        returnString += "\\x00";
       } else if (charToConvert.length === 1) {
-        returnString += '\\x0' + charToConvert;
+        returnString += "\\x0" + charToConvert;
       } else {
-        returnString += '\\x' + charToConvert;
+        returnString += "\\x" + charToConvert;
       }
     }
   }
@@ -126,100 +162,89 @@ function decodeBuffer(buf) {
 
 // Send an HTTP error response
 http_error = function (response, code, msg) {
-    response.writeHead(code, {"Content-Type": "text/plain"});
-    response.write(msg + "\n");
-    response.end();
-    return;
-}
+  response.writeHead(code, { "Content-Type": "text/plain" });
+  response.write(msg + "\n");
+  response.end();
+  return;
+};
 
 // Process an HTTP static file request
 http_request = function (request, response) {
-//    console.log("pathname: " + url.parse(req.url).pathname);
-//    res.writeHead(200, {'Content-Type': 'text/plain'});
-//    res.end('okay');
+  if (request.url !== "/status") {
+    return http_error(response, 403, "403 Permission Denied");
+  }
 
-    if (! argv.web) {
-        return http_error(response, 403, "403 Permission Denied");
-    }
-
-    var uri = url.parse(request.url).pathname
-        , filename = path.join(argv.web, uri);
-
-    fs.exists(filename, function(exists) {
-        if(!exists) {
-            return http_error(response, 404, "404 Not Found");
-        }
-
-        if (fs.statSync(filename).isDirectory()) {
-            filename += '/index.html';
-        }
-
-        fs.readFile(filename, "binary", function(err, file) {
-            if(err) {
-                return http_error(response, 500, err);
-            }
-
-            var headers = {};
-            var contentType = mime.contentType(path.extname(filename));
-            if (contentType !== false) {
-              headers['Content-Type'] = contentType;
-            }
-
-            response.writeHead(200, headers);
-            response.write(file, "binary");
-            response.end();
-        });
-    });
+  let status = { version: pjson.version, connections: websocket_count };
+  let headers = {};
+  headers["Content-Type"] = "application/json";
+  response.writeHead(200, headers);
+  response.write(JSON.stringify(status));
+  response.end();
 };
 
 // parse source and target arguments into parts
 try {
-    source_arg = argv._[0].toString();
-    target_arg = argv._[1].toString();
+  if (!argv.username) {
+    throw "username required for WEBIRC";
+  }
 
-    var idx;
-    idx = source_arg.indexOf(":");
-    if (idx >= 0) {
-        source_host = source_arg.slice(0, idx);
-        source_port = parseInt(source_arg.slice(idx+1), 10);
-    } else {
-        source_host = "";
-        source_port = parseInt(source_arg, 10);
-    }
+  if (!argv.password) {
+    throw "password required for WEBIRC";
+  }
 
-    idx = target_arg.indexOf(":");
-    if (idx < 0) {
-        throw("target must be host:port");
-    }
-    target_host = target_arg.slice(0, idx);
-    target_port = parseInt(target_arg.slice(idx+1), 10);
+  source_arg = argv._[0].toString();
+  target_arg = argv._[1].toString();
 
-    if (isNaN(source_port) || isNaN(target_port)) {
-        throw("illegal port");
-    }
-} catch(e) {
-    console.error("websockify.js [--web web_dir] [--cert cert.pem [--key key.pem]] [--record dir] [source_addr:]source_port target_addr:target_port");
-    process.exit(2);
+  let idx;
+  idx = source_arg.indexOf(":");
+  if (idx >= 0) {
+    source_host = source_arg.slice(0, idx);
+    source_port = parseInt(source_arg.slice(idx + 1), 10);
+  } else {
+    source_host = "";
+    source_port = parseInt(source_arg, 10);
+  }
+
+  idx = target_arg.indexOf(":");
+  if (idx < 0) {
+    throw "target must be host:port";
+  }
+  target_host = target_arg.slice(0, idx);
+  target_port = parseInt(target_arg.slice(idx + 1), 10);
+
+  if (isNaN(source_port) || isNaN(target_port)) {
+    throw "illegal port";
+  }
+} catch (e) {
+  console.error(`error: ${e}`);
+  console.dir(argv);
+  console.error(
+    `${current_file} [--web web_dir] [--cert cert.pem [--key key.pem]] [--record dir] [source_addr:]source_port target_addr:target_port`,
+  );
+  process.exit(2);
 }
 
 console.log("WebSocket settings: ");
-console.log("    - proxying from " + source_host + ":" + source_port +
-            " to " + target_host + ":" + target_port);
+console.log(
+  `    - proxying from ${source_host}:${source_port} to ${target_host}:${target_port}`,
+);
 if (argv.web) {
-    console.log("    - Web server active. Serving: " + argv.web);
+  console.log(`    - Web server active. Serving: " + ${argv.web}`);
 }
 
 if (argv.cert) {
-    argv.key = argv.key || argv.cert;
-    var cert = fs.readFileSync(argv.cert),
-        key = fs.readFileSync(argv.key);
-    console.log("    - Running in encrypted HTTPS (wss://) mode using: " + argv.cert + ", " + argv.key);
-    webServer = https.createServer({cert: cert, key: key}, http_request);
+  argv.key = argv.key || argv.cert;
+  let cert = fs.readFileSync(argv.cert),
+    key = fs.readFileSync(argv.key);
+  console.log(
+    `    - Running in encrypted HTTPS (wss://) mode using: ${argv.cert}, ${argv.key}`,
+  );
+  webServer = https.createServer({ cert: cert, key: key }, http_request);
 } else {
-    console.log("    - Running in unencrypted HTTP (ws://) mode");
-    webServer = http.createServer(http_request);
+  console.log("    - Running in unencrypted HTTP (ws://) mode");
+  webServer = http.createServer(http_request);
 }
-webServer.listen(source_port, function() {
-    wsServer = new WebSocketServer({server: webServer});
-    wsServer.on('connection', new_client);
+webServer.listen(source_port, function () {
+  wsServer = new WebSocketServer({ server: webServer });
+  wsServer.on("connection", new_client);
 });
