@@ -13,7 +13,7 @@
 
 const argv = require("optimist").argv,
     net = require("net"),
-    dns = require("dns"),
+    FCrDNS = require('fcrdns'),
     http = require("http"),
     https = require("https"),
     url = require("url"),
@@ -34,42 +34,33 @@ let webServer,
     web_path = null,
     websocket_count = 0;
 
-const options = {
-    family: 6,
-    hints: dns.ADDRCONFIG | dns.V4MAPPED,
-};
+const rDNS = new FCrDNS();
 
 // Handle new WebSocket client
 new_client = function (client, req) {
     websocket_count++;
-    let clientAddr = client._socket.remoteAddress,
-        hostAddr = null;
+    let clientAddr = client._socket.remoteAddress;
 
     console.log(req ? req.url : client.upgradeReq.url);
-
     console.log(`WebSocket connection from: ${clientAddr}`);
     console.log(
         "Version " + client.protocolVersion + ", subprotocol: " + client.protocol
     );
 
+    let rs = null;
     if (argv.record) {
-        let rs = fs.createWriteStream(
+        rs = fs.createWriteStream(
             argv.record + "/" + new Date().toISOString().replace(/:/g, "_")
         );
         rs.write("let VNC_frame_data = [\n");
-    } else {
-        let rs = null;
     }
-
-    dns.lookupService(
-        client._socket.remoteAddress,
-        client._socket.remotePort,
-        function (err, hostname, service) {
+    
+    rDNS.get(client._socket.remoteAddress, function(hostname) {
+        if (hostname !== null) {
             console.log(`Resolved dns: ${hostname}`);
-            hostAddr = hostname;
-            createConnection(client, req, rs, clientAddr, hostAddr);
         }
-    );
+        createConnection(client, req, rs, clientAddr, hostname);
+    });
 };
 
 function createConnection(client, req, rs, clientAddr, hostAddr) {
