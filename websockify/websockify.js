@@ -55,12 +55,21 @@ const new_client = function (client, req) {
     rs.write("let VNC_frame_data = [\n");
   }
 
-  rDNS.get(client._socket.remoteAddress, function (hostname) {
-    if (hostname !== null) {
-      console.log(`Resolved dns: ${hostname}`);
+  let resolvedHostname = null;
+  const resolveHostname = (hostname) => {
+    if (hostname) {
+      console.log(`Resolved dns: ${JSON.stringify(hostname)}`);
+      resolvedHostname = hostname;
     }
-    createConnection(client, req, rs, clientAddr, hostname);
-  });
+  };
+
+  try {
+    rDNS.get(clientAddr, resolveHostname);
+  } catch (e) {
+    console.error(e);
+  } finally {
+    createConnection(client, req, rs, clientAddr, resolvedHostname);
+  }
 };
 
 function createConnection(client, req, rs, clientAddr, hostAddr) {
