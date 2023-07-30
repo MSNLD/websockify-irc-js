@@ -11,20 +11,21 @@
 // WEBIRC Spec based on
 // https://ircv3.net/specs/extensions/webirc.html
 
-const argv = require("optimist").argv,
-  net = require("net"),
-  FCrDNS = require("fcrdns"),
-  http = require("http"),
-  https = require("https"),
-  url = require("url"),
-  path = require("path"),
-  fs = require("fs"),
-  mime = require("mime-types"),
-  Buffer = require("buffer").Buffer,
-  WebSocketServer = require("ws").Server;
-
+const argv = require("optimist").argv;
+const net = require("net");
+const FCrDNS = require("fcrdns");
+const http = require("http");
+const https = require("https");
+const url = require("url");
+const path = require("path");
+const fs = require("fs");
+const mime = require("mime-types");
+const Buffer = require("buffer").Buffer;
+const WebSocketServer = require("ws").Server;
 const current_file = require("path").basename(__filename);
 const pjson = require("./package.json");
+
+const rDNS = new FCrDNS();
 
 let webServer,
   wsServer,
@@ -35,10 +36,8 @@ let webServer,
   web_path = null,
   websocket_count = 0;
 
-const rDNS = new FCrDNS();
-
 // Handle new WebSocket client
-new_client = function (client, req) {
+const new_client = function (client, req) {
   websocket_count++;
   let clientAddr = client._socket.remoteAddress;
 
